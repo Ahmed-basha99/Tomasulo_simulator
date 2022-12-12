@@ -25,13 +25,14 @@ class ResStation {
   busy: boolean;
   pc :number;
   op?: string;
-  Vj?: number;
-  Vk?: number;
-  Qj?: number;
-  Qk?: number;
-  Dest?: number;
+  Vj: number;
+  Vk: number;
+  Qj: number;
+  Qk: number;
+  Vi: number;
   A?: string;
-  Imm?: number;
+  Imm: number;
+  type:InstType;
   timeRemaining : number;
   executing:boolean;
   constructor (stationName: string){
@@ -44,10 +45,11 @@ class ResStation {
     this.Vk=-1;
     this.Qj=-1;
     this.Qk=-1;
-    this.Dest=-1;
+    this.Vi=-1;
     this.A="";
     this.Imm=0;
     this.timeRemaining =0;
+    this.type = InstType.INVALID;
   }
 }
 enum InstType {
@@ -115,19 +117,22 @@ enum RegState {
 }
 class Register {
    station : number;
-   busy:boolean;
+   RAW:boolean;
+   WA:boolean;
    value :number;
    // array : number[];
    constructor(value : number) {
      this.station =0;
      this.value =value;
-     this.busy =false;
+     this.RAW =false;
+     this.WA =false;
      // this.array = [];
    }
 
 }
 // 8 regs
-var regs : Register[] = [new Register(0) ,
+let regMap = new Map<number, number>();
+var regs : Register[] = [new Register(0) , // const reg only zero value
                         new Register(1) ,
                         new Register(1) ,
                         new Register(1) ,
@@ -137,13 +142,28 @@ var regs : Register[] = [new Register(0) ,
                         new Register(1) ,];
 
 
-function rename (x :number){
-
+function rename (x :number):number{
+  let ans :number = -1;
+  if (regMap.has(x)==false) {    // if it is read operand and it is not renamed yet, use new regs to rename it
+    ans = freelist(x);
+    return ans;
+  }
+  ans = regMap.get(x) as number;
+  return ans;
 }
 
-function freelist(x:number){
+function freelist(x:number): number{
     // check if there is anything that can be freed
-
+    let free = -1;
+    for (let i=1;i<8;i++){
+      if (regs[i].WA==false) { // if reg is not used for renaming already
+        free= i;
+        break;
+      }
+    }
+    regs[free].WA=true;
+    regMap.set(x,free);
+    return free;
 }
 
 var instructions: Instruction[] = [];
@@ -390,11 +410,29 @@ function issue (clock : number){
 
     // before I decide to issue the instruction, I need to see if there is a free register to rename
     // rename the opearnds register
+    let opj :number= rename(instructions[i].vj);
+    let opk :number = 0;
+    if (instructions[i].instType!=InstType.NEG)opk= rename(instructions[i].vk);
+    if (opj == -1 || opk == -1) { // we cant issue the instruction yet
+      console.log("no free register");
+      continue;
+    }
+    // renaming read operands
+    instructions[i].vj = opj;
+    // only rename if its not an inst with one read operands
+    if (instructions[i].instType!=InstType.NEG)instructions[i].vk = opk;
 
-
+    // assign name to destination register
+    let opi = freelist(instructions[i].vi);
+    if (opi == -1){ // nothing free
+      continue;
+    }
+    instructions[i].vi = opi;
+    resStations[stationIndex].Vi = instructions[i].vi;
     resStations[stationIndex].busy=true;
     resStations[stationIndex].Imm = instructions[i].imm;
     resStations[stationIndex].timeRemaining =instructions[i].exeTime;
+    resStations[stationIndex].type= instructions[i].instType;
     resStations[stationIndex].op =  (instructions[i].instType==InstType.NEG )?"NEG" :
                                       (instructions[i].instType==InstType.MULT )?"MULT" :
                                       (instructions[i].instType==InstType.ADDI )?"ADDI" :
@@ -408,10 +446,10 @@ function issue (clock : number){
 
 
     instructions[i].issue=true;
-    regs[instructions[i].vi].busy= true;
+    regs[instructions[i].vi].RAW= true;
     regs[instructions[i].vi].value=stationIndex;
 
-    if (!regs[instructions[i].vj].busy){
+    if (!regs[instructions[i].vj].RAW){
       resStations[stationIndex].Vj = instructions[i].vj;
       // regs[instructions[i].vi].value=stationIndex;
     }
@@ -421,7 +459,7 @@ function issue (clock : number){
     //
     if (instructions[i].instType==InstType.NEG || instructions[i].instType== InstType.ADDI) continue;
 
-    if (regs[instructions[i].vk].busy==false){
+    if (regs[instructions[i].vk].RAW==false){
       resStations[stationIndex].Vk = instructions[i].vk;
     }
     else {
@@ -429,7 +467,18 @@ function issue (clock : number){
     }
   }
 }
-function exe (clk : number ){
+let writeBackVector :number[] = [];
+function writeBack (){
+
+  for (let i = 0; i<writeBackVector.length ;i+=2){
+    let index = writeBackVector[i];
+    let value= writeBackVector[i+1];
+    regs[index].value= value;
+    regs[index].RAW=false;
+  }
+  writeBackVector= [];
+}
+function exe (clk : number ) {
   // decreasing execution time
   // iterate over resstation, if operands are ready, then, decrease reamaining time
 
@@ -444,16 +493,32 @@ function exe (clk : number ){
                  if (clk==1) console.log(resStations[i].timeRemaining);
                  resStations[i].busy = false;
                  resStations[i].executing = false;
+                 resStations[i].op= "";
+                 let indexJ :number= resStations[i].Vj;
+                 let indexK :number=resStations[i].Vk;
+                 let indexI :number=resStations[i].Vi;
+
+                 let wrtieBackValue = (resStations[i].type == InstType.ADD) ? regs[indexJ].value + regs[indexK].value :
+                     (resStations[i].type == InstType.ADDI)?regs[indexJ].value + resStations[i].Imm :
+                         (resStations[i].type == InstType.MULT)?regs[indexJ].value * regs[indexK].value :
+                             (resStations[i].type == InstType.NEG) ? (~regs[indexJ].value) +1 :
+                                 (resStations[i].type == InstType.NOR) ?  ~(regs[indexJ].value | regs[indexK].value) :
+                                     (resStations[i].type == InstType.Load)? regs[indexJ].value:0;
+
+
+                  writeBackVector.push(indexI);
+                  writeBackVector.push(wrtieBackValue);
+
                  resStations[i].Vk= resStations[i].Vj = resStations[i].Qj = resStations[i].Qk = -1;
+
+                 // calc write back value
                  // push write back queue here to update regs
               }
       }
   }
-}
-function writeBack (){
-
 
 }
+
 function update (clock : number){
   // now I have resstations
   // regs
@@ -461,6 +526,7 @@ function update (clock : number){
   // next step
   console.log("clk : " , clock);
   //writeBack
+  writeBack();
   exe(clock);
   issue(clock);
 
@@ -588,7 +654,7 @@ function App() {
                       <td> {station.Vk}</td>
                       <td> {station.Qj}</td>
                       <td> {station.Qk}</td>
-                      <td> {station.Dest}</td>
+                      <td> {station.Vi}</td>
                       <td> {station.A}</td>
                       <td> {station.Imm}</td>
                       <td>{station.timeRemaining}</td>

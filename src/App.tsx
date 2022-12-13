@@ -35,6 +35,8 @@ class ResStation {
   type:InstType;
   timeRemaining : number;
   executing:boolean;
+  forwardignRegiter:number;
+  writeBackVal:number;
   constructor (stationName: string){
     this.name=stationName;
     this.executing=false;
@@ -50,6 +52,8 @@ class ResStation {
     this.Imm=0;
     this.timeRemaining =0;
     this.type = InstType.INVALID;
+    this.writeBackVal =0;
+    this.forwardignRegiter = 0;
   }
 }
 enum InstType {
@@ -143,6 +147,8 @@ var regs : Register[] = [new Register(0) , // const reg only zero value
 
 
 function rename (x :number):number{
+  if (x==0) return x;
+  if (x==3) console.log(regMap, regMap.has(x));
   let ans :number = -1;
   if (regMap.has(x)==false) {    // if it is read operand and it is not renamed yet, use new regs to rename it
     ans = freelist(x);
@@ -154,6 +160,7 @@ function rename (x :number):number{
 
 function freelist(x:number): number{
     // check if there is anything that can be freed
+    if (x==0) return x;
     let free = -1;
     for (let i=1;i<8;i++){
       if (regs[i].WA==false) { // if reg is not used for renaming already
@@ -411,6 +418,7 @@ function issue (clock : number){
     // before I decide to issue the instruction, I need to see if there is a free register to rename
     // rename the opearnds register
     let opj :number= rename(instructions[i].vj);
+    console.log(opj);
     let opk :number = 0;
     if (instructions[i].instType!=InstType.NEG)opk= rename(instructions[i].vk);
     if (opj == -1 || opk == -1) { // we cant issue the instruction yet
@@ -419,6 +427,7 @@ function issue (clock : number){
     }
     // renaming read operands
     instructions[i].vj = opj;
+    console.log(opj);
     // only rename if its not an inst with one read operands
     if (instructions[i].instType!=InstType.NEG)instructions[i].vk = opk;
 
@@ -433,6 +442,7 @@ function issue (clock : number){
     resStations[stationIndex].Imm = instructions[i].imm;
     resStations[stationIndex].timeRemaining =instructions[i].exeTime;
     resStations[stationIndex].type= instructions[i].instType;
+    resStations[stationIndex].pc=instructions[i].pc;
     resStations[stationIndex].op =  (instructions[i].instType==InstType.NEG )?"NEG" :
                                       (instructions[i].instType==InstType.MULT )?"MULT" :
                                       (instructions[i].instType==InstType.ADDI )?"ADDI" :
@@ -447,34 +457,37 @@ function issue (clock : number){
 
     instructions[i].issue=true;
     regs[instructions[i].vi].RAW= true;
-    regs[instructions[i].vi].value=stationIndex;
-
-    if (!regs[instructions[i].vj].RAW){
+    regs[instructions[i].vi].station=stationIndex;
+    // if its writing
+    if (regs[instructions[i].vj].RAW==false){
       resStations[stationIndex].Vj = instructions[i].vj;
-      // regs[instructions[i].vi].value=stationIndex;
+       regs[instructions[i].vi].station=stationIndex;
     }
     else {
-      resStations[stationIndex].Qj = regs[instructions[i].vj].value;
+      resStations[stationIndex].Qj = regs[instructions[i].vj].station;
     }
     //
     if (instructions[i].instType==InstType.NEG || instructions[i].instType== InstType.ADDI) continue;
 
     if (regs[instructions[i].vk].RAW==false){
       resStations[stationIndex].Vk = instructions[i].vk;
+      regs[instructions[i].vi].station=stationIndex;
     }
     else {
-      resStations[stationIndex].Qk = regs[instructions[i].vk].value;
+      resStations[stationIndex].Qk = regs[instructions[i].vk].station;
     }
   }
 }
 let writeBackVector :number[] = [];
 function writeBack (){
 
-  for (let i = 0; i<writeBackVector.length ;i+=2){
+  for (let i = 0; i<writeBackVector.length ;i+=3){
     let index = writeBackVector[i];
     let value= writeBackVector[i+1];
+    let pc = writeBackVector[i+2];
     regs[index].value= value;
     regs[index].RAW=false;
+    instructions[pc].write=true;
   }
   writeBackVector= [];
 }
@@ -482,43 +495,77 @@ function exe (clk : number ) {
   // decreasing execution time
   // iterate over resstation, if operands are ready, then, decrease reamaining time
 
+
+
+
   // iterate over resstations,
   for (let i=0;i<resStations.length;i++){
-      if (resStations[i].busy && resStations[i].Qj==-1 && resStations[i].Qk==-1){ // operands are ready
+      if (resStations[i].busy==false) continue;
+
+      if ( resStations[i].Qj==-1 && resStations[i].Qk==-1){ // operands are ready
               resStations[i].executing=true;
               resStations[i].timeRemaining--;
         if (clk ==1) console.log("remaining : ", resStations[i].timeRemaining );
 
         if(resStations[i].timeRemaining==0) {
-                 if (clk==1) console.log(resStations[i].timeRemaining);
+
+                let pc:number = resStations[i].pc;
+                let indexJ :number= resStations[i].Vj;
+                let indexK :number=resStations[i].Vk;
+                let indexI :number=resStations[i].Vi;
                  resStations[i].busy = false;
                  resStations[i].executing = false;
                  resStations[i].op= "";
-                 let indexJ :number= resStations[i].Vj;
-                 let indexK :number=resStations[i].Vk;
-                 let indexI :number=resStations[i].Vi;
+                 resStations[i].forwardignRegiter= resStations[i].Vi;
 
+                 instructions[pc].execute= true;
+                 regs[resStations[i].Vi].RAW =false;
+                 if (resStations[i].type == InstType.NOR) console.log(regs[indexJ].value | regs[indexK].value,  ~(regs[indexJ].value | regs[indexK].value))
+                 console.log(i,indexI,indexJ,indexK);
                  let wrtieBackValue = (resStations[i].type == InstType.ADD) ? regs[indexJ].value + regs[indexK].value :
                      (resStations[i].type == InstType.ADDI)?regs[indexJ].value + resStations[i].Imm :
                          (resStations[i].type == InstType.MULT)?regs[indexJ].value * regs[indexK].value :
                              (resStations[i].type == InstType.NEG) ? (~regs[indexJ].value) +1 :
                                  (resStations[i].type == InstType.NOR) ?  ~(regs[indexJ].value | regs[indexK].value) :
                                      (resStations[i].type == InstType.Load)? regs[indexJ].value:0;
-
-
+                  resStations[i].Imm=0;
+                  console.log(wrtieBackValue);
                   writeBackVector.push(indexI);
                   writeBackVector.push(wrtieBackValue);
-
-                 resStations[i].Vk= resStations[i].Vj = resStations[i].Qj = resStations[i].Qk = -1;
+                  writeBackVector.push(pc);
+                  resStations[i].Vi=resStations[i].Vk= resStations[i].Vj = resStations[i].Qj = resStations[i].Qk = -1;
 
                  // calc write back value
                  // push write back queue here to update regs
               }
       }
+
   }
+
 
 }
 
+function forward(){
+  // loop to check if there is anything ready to be forwarded from other resstations
+  for (let i=0;i<resStations.length;i++){
+    if (resStations[i].busy && resStations[i].Qj!=-1){ // check if vj can be forwared from other station
+      let forwarderStationIndex = resStations[i].Qj;
+      if (resStations[forwarderStationIndex].executing==false) { // forwarder station finshed executing
+        resStations[i].Vj=resStations[forwarderStationIndex].forwardignRegiter;
+        console.log("---------",resStations[i].Vj, i);
+
+        resStations[i].Qj =-1;
+      }
+    }
+    if (resStations[i].busy && resStations[i].Qk!=-1){ // check if vj can be forwared from other station
+      let forwarderStationIndex = resStations[i].Qk;
+      if (resStations[forwarderStationIndex].executing==false) { // forwarder station finshed executing
+        resStations[i].Vk=resStations[forwarderStationIndex].forwardignRegiter;
+        resStations[i].Qk =-1;
+      }
+    }
+  }
+}
 function update (clock : number){
   // now I have resstations
   // regs
@@ -529,6 +576,7 @@ function update (clock : number){
   writeBack();
   exe(clock);
   issue(clock);
+  forward();
 
 
 }
@@ -538,6 +586,7 @@ function App() {
   const [code, setCode] = useState<string>("");
   const [issue, setIssue] = useState <Instruction[]>(instructions);
   const [stationPool, setStationPool] = useState < ResStation[]> (resStations);
+  const [regFile, setRegFile] = useState < Register[]> (regs);
   return (
       <div className="App">
         <div className="container">
@@ -594,6 +643,7 @@ function App() {
             setIssue([...instructions]);
             let copy2 = resStations;
             setStationPool( [...resStations]);
+            setRegFile([...regs]);
             console.log(resStations);
 
             // let copy2 = resStations;
@@ -650,12 +700,12 @@ function App() {
                       <td> {station.name}</td>
                       <td> {String(station.busy)}</td>
                       <td> {station.op}</td>
-                      <td> {station.Vj}</td>
-                      <td> {station.Vk}</td>
-                      <td> {station.Qj}</td>
-                      <td> {station.Qk}</td>
-                      <td> {station.Vi}</td>
-                      <td> {station.A}</td>
+                      <td> {(station.Vj == -1)?"":station.Vj}</td>
+                      <td>  {(station.Vk == -1)?"":station.Vk}</td>
+                      <td>  {(station.Qj == -1)?"":station.Qj}</td>
+                      <td>  {(station.Qk == -1)?"":station.Qk}</td>
+                      <td>  {(station.Vi == -1)?"":station.Vi}</td>
+                      <td>  {station.A}</td>
                       <td> {station.Imm}</td>
                       <td>{station.timeRemaining}</td>
                     </tr>
@@ -665,6 +715,52 @@ function App() {
             </tbody>
           </table>
 
+
+          <h1>Register File</h1>
+          <table className="table table-bordered table-hover" border={1}>
+            <thead>
+            <tr>
+              <td>
+                <strong>R0</strong>
+              </td>
+              <td>
+                <strong>R1</strong>
+              </td>
+              <td>
+                <strong>R2</strong>
+              </td>
+              <td>
+                <strong>R3</strong>
+              </td>
+              <td>
+                <strong>R4</strong>
+              </td>
+              <td>
+                <strong>R5</strong>
+              </td>
+              <td>
+                <strong>R6</strong>
+              </td>
+              <td>
+                <strong>R7</strong>
+              </td>
+
+            </tr>
+            </thead>
+            <tbody id="res-station">
+              <tr>
+                <td>{regFile[0].value}</td>
+                <td>{regFile[1].value}</td>
+                <td>{regFile[2].value}</td>
+                <td>{regFile[3].value}</td>
+                <td>{regFile[4].value}</td>
+                <td>{regFile[5].value}</td>
+                <td>{regFile[6].value}</td>
+                <td>{regFile[7].value}</td>
+
+              </tr>
+            </tbody>
+          </table>
 
 
         </div>

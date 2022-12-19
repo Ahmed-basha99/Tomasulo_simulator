@@ -745,9 +745,8 @@ function App() {
             }
             </tbody>
           </table>
-          <button className="btn" id="run">Run</button>
-          <button className="btn" id="step" onClick = {()=>{
 
+          <button className="btn" id="Next" onClick = {()=>{
             // check other states not related
             update(clk++);
 

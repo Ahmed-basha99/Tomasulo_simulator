@@ -30,7 +30,7 @@ class ResStation {
   Qj: number;
   Qk: number;
   Vi: number;
-  A?: string;
+  A: number;
   Imm: number;
   type:InstType;
   timeRemaining : number;
@@ -48,7 +48,7 @@ class ResStation {
     this.Qj=-1;
     this.Qk=-1;
     this.Vi=-1;
-    this.A="";
+    this.A=-1;
     this.Imm=0;
     this.timeRemaining =0;
     this.type = InstType.INVALID;
@@ -80,10 +80,11 @@ class Instruction{
   vk:number;
   imm:number;
   exeTime : number;
+  started:boolean;
   issue?: boolean;
   execute?: boolean;
   write?: boolean;
-
+  
   constructor (type: InstType, pc: number, inst:string, vi:number, vj:number, vk:number, imm:number){
     this.instType = type;
     this.imm = imm;
@@ -91,13 +92,14 @@ class Instruction{
     this.vj = vj;
     this.vk = vk;
     this.inst = inst;
-    this.exeTime = (type in [InstType.Load, InstType.Store, InstType.ADD, InstType.ADDI] )?2 :
+    this.exeTime = (type == InstType.ADD || type == InstType.ADDI || type==InstType.BEQ  )?2 :
+                    (type==InstType.Store)?3 :(type==InstType.Load)?4:
                  (type == InstType.MULT) ? 8 : 1;
     this.pc = pc;
     this.issue=false;
     this.execute=false;
     this.write=false;
-
+     this.started= false;
   }
 
 
@@ -168,13 +170,18 @@ function freelist(x:number): number{
         break;
       }
     }
+    if (free==-1) {
+      console.log("no free register");
+      return -1;
+    }
     regs[free].WA=true;
     regMap.set(x,free);
     return free;
 }
 
 var instructions: Instruction[] = [];
-
+var instructionQueue : Instruction[]= [];
+let curPc = 0;
 const re: RegExp = /([a-zA-Z.]+)\s+([rR]\d)[ ,]+([rR]?\d+)[,(\s+]+([rR]\d+)\)?(?:\s+=\s+(\d+))?/gm;
 function parse  (x :string) :[InstType,number,number, number, number] {
   let ans : [InstType,number,number, number,number] = [InstType.INVALID, 0,0,0,0] ;
@@ -219,8 +226,6 @@ function parse  (x :string) :[InstType,number,number, number, number] {
   }
   else  return ans;
 
-
-
   // extract operands
 
   if (ans[0]==InstType.RET) { // no operands
@@ -253,6 +258,8 @@ function parse  (x :string) :[InstType,number,number, number, number] {
 
          else if (x[index]>='0' && x[index]<='9') temp+=x[index];
      }
+     ans[3]= ans[2];
+     ans[2] = ans[1];
      ans[4] = +temp;
      return ans;
   }
@@ -260,12 +267,10 @@ function parse  (x :string) :[InstType,number,number, number, number] {
   else if (ans[0]==InstType.Store || ans[0] == InstType.Load) {
     let temp:string ="";
     for (;index<x.length;index++){
-      // console.log(x[index]);
       if (x[index]>='0' && x[index]<='9') temp+=x[index];
       else if (x[index]=='(') {
         ans[4]= +temp;
         temp ="";
-        // console.log('ahmed');
       }
       else if (x[index]==')') {
         ans[2]= +temp;
@@ -275,6 +280,10 @@ function parse  (x :string) :[InstType,number,number, number, number] {
         ans[1]= +temp;
         temp="";
       }
+    }
+    if (ans[0]==InstType.Store) {
+      ans[3] = ans[2];
+      ans [2]= ans[1];
     }
     return ans;
   }
@@ -295,8 +304,6 @@ function parse  (x :string) :[InstType,number,number, number, number] {
   }
 
 
-
-
   return ans;
 }
 let pcCounter :number = 0;
@@ -314,7 +321,6 @@ function readInstructions(code: (string | null | undefined)): Instruction[]{
         instructions.push(new Instruction(type,pcCounter++,tempInst,vi,vj,vk,imm));
         tempInst = "";
       }
-
     }
   }
 
@@ -345,6 +351,7 @@ const CodeInput: React.FC<Props> = ({code, setCode, issue, setIssue}) => {
           readInstructions(target.parentNode?.childNodes[1].textContent);
           setIssue(instructions);
           setCode ("");
+
           //console.log(target.parentNode?.childNodes[1].textContent);
         }}>Load</button>
 
@@ -366,6 +373,9 @@ const CodeInput: React.FC<Props> = ({code, setCode, issue, setIssue}) => {
       </div>
   )
 }
+let memory:number[]= [];
+for (let i =0;i<65536;i++) memory[i]= 0;
+for (let i=0;i<=3;i++) memory[i]= i;
 
 var resStations: ResStation[] = [
   new ResStation("Add/AddI 1"),
@@ -381,18 +391,21 @@ var resStations: ResStation[] = [
   new ResStation("NEG"),
   new ResStation("NOR"),
 ];
-
-function issue (clock : number){
+function puchInstToQueue(){
+    console.log(curPc);
+  if (curPc < instructions.length)instructionQueue.push((instructions[curPc]));
+}
+function issue(clock : number){
   // issue to resstation array
-  console.log(instructions.length, clock);
-  console.log("ahmed");
-  for (let i:number =0; i<instructions.length && instructions[i].pc<=clock;i++) {
+  console.log(instructionQueue.length, clock);
+  let ans =0;
+  for (let i:number =0; i<instructionQueue.length ;i++) {
     // check for strutural hazard
 
 
-    if (instructions[i].issue) continue;
+    if (instructionQueue[i].issue) continue;
     let stationIndex = -1;
-    if (instructions[i].instType == InstType.ADD || instructions[i].instType == InstType.ADDI) {
+    if (instructionQueue[i].instType == InstType.ADD || instructionQueue[i].instType == InstType.ADDI) {
         for (let j:number=2;j>=0;j--){
             if(!resStations[j].busy) {
                stationIndex = j;
@@ -400,83 +413,101 @@ function issue (clock : number){
            }
         }
     }
-    else if (instructions[i].instType == InstType.NEG && !resStations[10].busy) {
+    else if (instructionQueue[i].instType == InstType.NEG && !resStations[10].busy) {
        stationIndex = 10;
     }
-    else if (instructions[i].instType == InstType.NOR && !resStations[11].busy) {
+    else if (instructionQueue[i].instType == InstType.NOR && !resStations[11].busy) {
       stationIndex = 11;
     }
-    else if (instructions[i].instType == InstType.MULT && !resStations[9].busy) {
+    else if (instructionQueue[i].instType == InstType.MULT && !resStations[9].busy) {
        stationIndex = 9;
     }
+    else if (instructionQueue[i].instType == InstType.Load ){
+      if (resStations[3].busy==false) stationIndex = 3;
+      else if (resStations[4].busy==false) stationIndex= 4;
+    }
+    else if (instructionQueue[i].instType==InstType.Store){
+      if (resStations[5].busy==false) stationIndex = 5;
+      else if (resStations[6].busy==false) stationIndex= 6;
+    }
+    else if ((instructionQueue[i].instType==InstType.RET|| instructionQueue[i].instType==InstType.JAL )  && resStations[8].busy==false)  {
+        stationIndex=8;
+        ans =1;
+    }
+    else if (instructionQueue[i].instType==InstType.BEQ  &&resStations[7].busy==false) {
+        stationIndex=7;
+        ans =2 ;
+    }
+
     console.log(stationIndex);
     if (stationIndex==-1) continue;
-
     console.log("stationIndex", stationIndex);
 
 
     // before I decide to issue the instruction, I need to see if there is a free register to rename
     // rename the opearnds register
-    let opj :number= rename(instructions[i].vj);
+    let opj :number= rename(instructionQueue[i].vj);
     console.log(opj);
     let opk :number = 0;
-    if (instructions[i].instType!=InstType.NEG)opk= rename(instructions[i].vk);
+    if (instructionQueue[i].instType!=InstType.NEG)opk= rename(instructionQueue[i].vk);
     if (opj == -1 || opk == -1) { // we cant issue the instruction yet
       console.log("no free register");
       continue;
     }
     // renaming read operands
-    instructions[i].vj = opj;
+    instructionQueue[i].vj = opj;
     console.log(opj);
     // only rename if its not an inst with one read operands
-    if (instructions[i].instType!=InstType.NEG)instructions[i].vk = opk;
+    if (instructionQueue[i].instType!=InstType.NEG)instructionQueue[i].vk = opk;
 
     // assign name to destination register
-    let opi = freelist(instructions[i].vi);
+
+    let opi = freelist(instructionQueue[i].vi);
     if (opi == -1){ // nothing free
       continue;
     }
-    instructions[i].vi = opi;
-    resStations[stationIndex].Vi = instructions[i].vi;
+    instructionQueue[i].vi = opi;
+    resStations[stationIndex].Vi = instructionQueue[i].vi;
     resStations[stationIndex].busy=true;
-    resStations[stationIndex].Imm = instructions[i].imm;
-    resStations[stationIndex].timeRemaining =instructions[i].exeTime;
-    resStations[stationIndex].type= instructions[i].instType;
-    resStations[stationIndex].pc=instructions[i].pc;
-    resStations[stationIndex].op =  (instructions[i].instType==InstType.NEG )?"NEG" :
-                                      (instructions[i].instType==InstType.MULT )?"MULT" :
-                                      (instructions[i].instType==InstType.ADDI )?"ADDI" :
-                                      (instructions[i].instType==InstType.ADD )?"ADD" :
-                                      (instructions[i].instType==InstType.NOR )?"NOR" :
-                                      (instructions[i].instType==InstType.Load )?"LOAD" :
-                                      (instructions[i].instType==InstType.Store )?"STORE" :
-                                      (instructions[i].instType==InstType.RET )?"RET" :
-                                      (instructions[i].instType==InstType.BEQ )?"BEQ" :
-                                      (instructions[i].instType==InstType.JAL )?"JAL" : "NONE";
+    resStations[stationIndex].Imm = instructionQueue[i].imm;
+    resStations[stationIndex].timeRemaining =instructionQueue[i].exeTime;
+    resStations[stationIndex].type= instructionQueue[i].instType;
+    resStations[stationIndex].pc=i;//instructionQueue[i].pc;
+    resStations[stationIndex].op =  (instructionQueue[i].instType==InstType.NEG )?"NEG" :
+                                      (instructionQueue[i].instType==InstType.MULT )?"MULT" :
+                                      (instructionQueue[i].instType==InstType.ADDI )?"ADDI" :
+                                      (instructionQueue[i].instType==InstType.ADD )?"ADD" :
+                                      (instructionQueue[i].instType==InstType.NOR )?"NOR" :
+                                      (instructionQueue[i].instType==InstType.Load )?"LOAD" :
+                                      (instructionQueue[i].instType==InstType.Store )?"STORE" :
+                                      (instructionQueue[i].instType==InstType.RET )?"RET" :
+                                      (instructionQueue[i].instType==InstType.BEQ )?"BEQ" :
+                                      (instructionQueue[i].instType==InstType.JAL )?"JAL" : "";
 
 
-    instructions[i].issue=true;
-    regs[instructions[i].vi].RAW= true;
-    regs[instructions[i].vi].station=stationIndex;
+    instructionQueue[i].issue=true;
+    regs[instructionQueue[i].vi].RAW= true;
+    regs[instructionQueue[i].vi].station=stationIndex;
     // if its writing
-    if (regs[instructions[i].vj].RAW==false){
-      resStations[stationIndex].Vj = instructions[i].vj;
-       regs[instructions[i].vi].station=stationIndex;
+    if (regs[instructionQueue[i].vj].RAW==false){
+      resStations[stationIndex].Vj = instructionQueue[i].vj;
+       regs[instructionQueue[i].vi].station=stationIndex;
     }
     else {
-      resStations[stationIndex].Qj = regs[instructions[i].vj].station;
+      resStations[stationIndex].Qj = regs[instructionQueue[i].vj].station;
     }
     //
-    if (instructions[i].instType==InstType.NEG || instructions[i].instType== InstType.ADDI) continue;
+    if (instructionQueue[i].instType==InstType.NEG || instructionQueue[i].instType== InstType.ADDI) continue;
 
-    if (regs[instructions[i].vk].RAW==false){
-      resStations[stationIndex].Vk = instructions[i].vk;
-      regs[instructions[i].vi].station=stationIndex;
+    if (regs[instructionQueue[i].vk].RAW==false){
+      resStations[stationIndex].Vk = instructionQueue[i].vk;
+      regs[instructionQueue[i].vi].station=stationIndex;
     }
     else {
-      resStations[stationIndex].Qk = regs[instructions[i].vk].station;
+      resStations[stationIndex].Qk = regs[instructionQueue[i].vk].station;
     }
   }
+  return ans;
 }
 let writeBackVector :number[] = [];
 function writeBack (){
@@ -487,38 +518,63 @@ function writeBack (){
     let pc = writeBackVector[i+2];
     regs[index].value= value;
     regs[index].RAW=false;
-    instructions[pc].write=true;
+    instructionQueue[pc].write=true;
   }
-  writeBackVector= [];
+  writeBackVector= []; // its reset
 }
-function exe (clk : number ) {
+let Prediction = true;
+let resStationPop = 0;
+function exe ( ):number {
+
   // decreasing execution time
   // iterate over resstation, if operands are ready, then, decrease reamaining time
 
-
-
-
   // iterate over resstations,
+  let ans =-1;
+  Prediction = true;
   for (let i=0;i<resStations.length;i++){
       if (resStations[i].busy==false) continue;
 
       if ( resStations[i].Qj==-1 && resStations[i].Qk==-1){ // operands are ready
               resStations[i].executing=true;
               resStations[i].timeRemaining--;
-        if (clk ==1) console.log("remaining : ", resStations[i].timeRemaining );
+        if ((resStations[i].type==InstType.Load && resStations[i].timeRemaining==2) ||
+            resStations[i].type==InstType.Store && resStations[i].timeRemaining==1){
+            resStations[i].A=regs[resStations[i].Vj].value+resStations[i].Imm;
+
+        }
 
         if(resStations[i].timeRemaining==0) {
+            let realPc = instructionQueue [resStations[i].pc].pc;
+            let pc:number = resStations[i].pc;
+            let indexJ :number= resStations[i].Vj;
+            let indexK :number=resStations[i].Vk;
+            let indexI :number=resStations[i].Vi;
+            if (resStations[i].type==InstType.BEQ){
+                ans = realPc+1+resStations[i].Imm;
+                Prediction =  regs[indexJ].value == regs[indexK].value;
+                if (Prediction==false) resStationPop = i;
+            }
+            if (resStations[i].type==InstType.JAL){
 
-                let pc:number = resStations[i].pc;
-                let indexJ :number= resStations[i].Vj;
-                let indexK :number=resStations[i].Vk;
-                let indexI :number=resStations[i].Vi;
+                ans = resStations[i].Imm;
+                console.log(ans);
+                  // rename R1
+                    let r1 = freelist(1);
+                    regs[r1].value= curPc;
+                }
+                else if (resStations[i].type==InstType.RET){
+                    let r1 = rename(1);
+                    ans = regs[r1].value;
+                }
+
+
                  resStations[i].busy = false;
                  resStations[i].executing = false;
                  resStations[i].op= "";
                  resStations[i].forwardignRegiter= resStations[i].Vi;
 
-                 instructions[pc].execute= true;
+                 instructionQueue[pc].execute= true;
                  regs[resStations[i].Vi].RAW =false;
                  if (resStations[i].type == InstType.NOR) console.log(regs[indexJ].value | regs[indexK].value,  ~(regs[indexJ].value | regs[indexK].value))
                  console.log(i,indexI,indexJ,indexK);
@@ -527,12 +583,25 @@ function exe (clk : number ) {
                          (resStations[i].type == InstType.MULT)?regs[indexJ].value * regs[indexK].value :
                              (resStations[i].type == InstType.NEG) ? (~regs[indexJ].value) +1 :
                                  (resStations[i].type == InstType.NOR) ?  ~(regs[indexJ].value | regs[indexK].value) :
-                                     (resStations[i].type == InstType.Load)? regs[indexJ].value:0;
+                                     (resStations[i].type == InstType.Load)? memory[resStations[i].A]:
+                                        (resStations[i].type == InstType.Store)?-1:0;
                   resStations[i].Imm=0;
+                  console.log(wrtieBackValue, indexI, indexJ, indexK);
+                  if (resStations[i].type==InstType.Load) {
+                    console.log(wrtieBackValue, indexI);
+                  }
                   console.log(wrtieBackValue);
-                  writeBackVector.push(indexI);
-                  writeBackVector.push(wrtieBackValue);
-                  writeBackVector.push(pc);
+                  if (wrtieBackValue!=-1){
+                    writeBackVector.push(indexI);
+                    writeBackVector.push(wrtieBackValue);
+                    writeBackVector.push(pc);
+                  }
+                  else {
+                    // update memory
+                    memory[resStations[i].A]= regs[indexJ].value;
+                    console.log(memory[resStations[i].A]);
+                  }
+                  resStations[i].A=-1;
                   resStations[i].Vi=resStations[i].Vk= resStations[i].Vj = resStations[i].Qj = resStations[i].Qk = -1;
 
                  // calc write back value
@@ -542,7 +611,7 @@ function exe (clk : number ) {
 
   }
 
-
+ return ans;
 }
 
 function forward(){
@@ -566,36 +635,82 @@ function forward(){
     }
   }
 }
+let branch = -1;
+let jall = 0;
 function update (clock : number){
   // now I have resstations
   // regs
-  // Instructions decoded
+  // instructionQueue decoded
   // next step
   console.log("clk : " , clock);
-  //writeBack
+  //writeBac
+
+  // if its not jall, push new instruciton
+    // otherwise stall issuing
+
+  if (jall==0||jall==2)puchInstToQueue();
   writeBack();
-  exe(clock);
-  issue(clock);
+  branch= exe();
+  if (!Prediction) {
+      console.log("flush");
+      resStations[resStationPop].A=-1;
+      resStations[resStationPop].Vi=resStations[resStationPop].Vk= resStations[resStationPop].Vj
+          = resStations[resStationPop].Qj = resStations[resStationPop].Qk = -1;
+      resStations[resStationPop].busy = false;
+      resStations[resStationPop].executing = false;
+      resStations[resStationPop].op= "";
+      console.log(instructionQueue);
+      instructionQueue.pop();
+      console.log(instructionQueue);
+  }
+  jall =issue(clock);  // return 1 if instruciton is jall , 2 if branch is issued
   forward();
-
-
+  console.log(branch);
+    
+  if (branch == -1) curPc++;
+  else curPc = branch;
+  console.log("pc", curPc);
 }
 
 let clk = 0;
 function App() {
   const [code, setCode] = useState<string>("");
-  const [issue, setIssue] = useState <Instruction[]>(instructions);
+  const [issue, setIssue] = useState <Instruction[]>(instructionQueue);
+  const [program,SetProgram]  = useState <Instruction[]>(instructions);
   const [stationPool, setStationPool] = useState < ResStation[]> (resStations);
   const [regFile, setRegFile] = useState < Register[]> (regs);
   return (
       <div className="App">
         <div className="container">
 
-          <CodeInput code={code} setCode={setCode} issue = {issue} setIssue={setIssue}/>
+          <CodeInput code={code} setCode={setCode} issue = {program} setIssue={SetProgram}/>
 
+            <h1> Program </h1>
+            <table className="table table-bordered table-hover" id="instructionQueue-table, border={1}">
+                <thead className="thead-dark">
+                <tr>
 
-          <h1> Instructions </h1>
-          <table className="table table-bordered table-hover" id="instructions-table, border={1}">
+                    <td>
+                        <strong></strong>
+                    </td>
+
+                </tr>
+                </thead>
+                <tbody id="instruction-table">
+                {
+                    program.map( (val:Instruction ) =>{
+                        return (
+                            <tr>
+
+                                <td >{val.inst}</td>
+
+                            </tr> )
+                    })
+                }
+                </tbody>
+            </table>
+          <h1> instructionQueue </h1>
+          <table className="table table-bordered table-hover" id="instructionQueue-table, border={1}">
             <thead className="thead-dark">
             <tr>
               <td>
@@ -640,7 +755,7 @@ function App() {
             const cp3  =code;
             setCode(cp3);
             let copy = instructions;
-            setIssue([...instructions]);
+            setIssue([...instructionQueue]);
             let copy2 = resStations;
             setStationPool( [...resStations]);
             setRegFile([...regs]);
@@ -705,7 +820,7 @@ function App() {
                       <td>  {(station.Qj == -1)?"":station.Qj}</td>
                       <td>  {(station.Qk == -1)?"":station.Qk}</td>
                       <td>  {(station.Vi == -1)?"":station.Vi}</td>
-                      <td>  {station.A}</td>
+                      <td>  {(station.A==-1)?"": station.A}</td>
                       <td> {station.Imm}</td>
                       <td>{station.timeRemaining}</td>
                     </tr>

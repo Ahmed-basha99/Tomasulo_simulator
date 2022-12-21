@@ -192,6 +192,7 @@ function parse  (x :string) :[InstType,number,number, number, number] {
   }
   else if ( x.substring(0,5)=="STORE")  {
     ans[0] = InstType.Store;
+    console.log(ans[0])
     index+=5;
   }
   else if ( x.substring(0,3)=="BEQ")  {
@@ -282,8 +283,9 @@ function parse  (x :string) :[InstType,number,number, number, number] {
       }
     }
     if (ans[0]==InstType.Store) {
-      ans[3] = ans[2];
-      ans [2]= ans[1];
+      ans [3]= ans[2];
+      ans[2]= ans[1];
+      ans[1]=0 ;
     }
     return ans;
   }
@@ -318,7 +320,8 @@ function readInstructions(code: (string | null | undefined)): Instruction[]{
       if (val =="\n" || i==code.length-1)     {
         let x  :[InstType, number, number, number, number] = parse(tempInst);
         let type = x[0], vi = x[1], vj = x[2] , vk = x[3] , imm = x[4];
-        instructions.push(new Instruction(type,pcCounter++,tempInst,vi,vj,vk,imm));
+        console.log(type , x[0])
+;        instructions.push(new Instruction(type,pcCounter++,tempInst,vi,vj,vk,imm));
         tempInst = "";
       }
     }
@@ -392,8 +395,11 @@ var resStations: ResStation[] = [
   new ResStation("NOR"),
 ];
 function puchInstToQueue(){
-    console.log(curPc);
-  if (curPc < instructions.length)instructionQueue.push((instructions[curPc]));
+  if (curPc < instructions.length) {
+      console.log(instructions[curPc]);
+
+      instructionQueue.push((instructions[curPc]));
+  }
 }
 function issue(clock : number){
   // issue to resstation array
@@ -599,6 +605,7 @@ function exe ( ):number {
                   else {
                     // update memory
                     memory[resStations[i].A]= regs[indexJ].value;
+                    instructionQueue[resStations[i].pc].write =true;
                     console.log(memory[resStations[i].A]);
                   }
                   resStations[i].A=-1;
@@ -666,15 +673,26 @@ function update (clock : number){
   jall =issue(clock);  // return 1 if instruciton is jall , 2 if branch is issued
   forward();
   console.log(branch);
-    
+
   if (branch == -1) curPc++;
   else curPc = branch;
   console.log("pc", curPc);
 }
 
 let clk = 0;
+function oneSec(){
+    return new Promise( resolve => setTimeout(resolve, 1000) );
+}
 function App() {
-  const [code, setCode] = useState<string>("");
+
+  const [code, setCode] = useState<string>("LOAD r2, 2(r0)\n" +
+      "STORE r2, 4(r0)\n" +
+      "LOAD r3, 3(r0)\n" +
+      "ADD r1,r2, r3\n" +
+      "STORE r1, 4(r0)\n" +
+      "MUL r1, r2, r3\n");
+
+  const [stop, setStop] = useState<boolean>(false);
   const [issue, setIssue] = useState <Instruction[]>(instructionQueue);
   const [program,SetProgram]  = useState <Instruction[]>(instructions);
   const [stationPool, setStationPool] = useState < ResStation[]> (resStations);
@@ -701,9 +719,7 @@ function App() {
                     program.map( (val:Instruction ) =>{
                         return (
                             <tr>
-
                                 <td >{val.inst}</td>
-
                             </tr> )
                     })
                 }
@@ -745,17 +761,14 @@ function App() {
             }
             </tbody>
           </table>
+          <button className="btn" id="step" onClick = {()=>{
 
-          <button className="btn" id="Next" onClick = {()=>{
             // check other states not related
             update(clk++);
 
             console.log(clk);
-            const cp3  =code;
-            setCode(cp3);
-            let copy = instructions;
+            setCode(code);
             setIssue([...instructionQueue]);
-            let copy2 = resStations;
             setStationPool( [...resStations]);
             setRegFile([...regs]);
             console.log(resStations);
@@ -767,9 +780,18 @@ function App() {
 
             // console.log(copy);
             // console.log(copy2);
-          }}>Step  </button>
-          <button className="btn" id="prev">Prev</button>
-          <button className="btn" id="rst">Reset</button>
+          }}>NEXT  </button>
+          <button className="btn" id="run" onClick = {async ()=>{
+              setStop(true);
+              while (!stop){
+                  await oneSec();
+                  update(clk++);
+                  setCode(code);
+
+                  setIssue([...instructionQueue]);
+                  setStationPool( [...resStations]);
+              }
+          }}>RUN </button>
           <h1>Reservation Stations</h1>
           <table className="table table-bordered table-hover" border={1}>
             <thead>
@@ -809,6 +831,7 @@ function App() {
             <tbody id="res-station">
             {
               stationPool.map((station:ResStation) =>{
+                  if (station.name == "BEQ" || station.name == "JAL/RET") return;
                 return (
                     <tr>
                       <td> {station.name}</td>
@@ -821,7 +844,6 @@ function App() {
                       <td>  {(station.Vi == -1)?"":station.Vi}</td>
                       <td>  {(station.A==-1)?"": station.A}</td>
                       <td> {station.Imm}</td>
-                      <td>{station.timeRemaining}</td>
                     </tr>
                 )
               })
